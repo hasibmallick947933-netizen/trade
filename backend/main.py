@@ -9,14 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import settings
 from backend.app.db.session import init_db
+from backend.app.db.mongo import init_mongo, close_mongo
 from backend.app.api.v1.router import api_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database tables
+    # Initialize relational and document database layers
     await init_db()
+    await init_mongo()
     yield
+    await close_mongo()
 
 
 app = FastAPI(

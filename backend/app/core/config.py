@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # Environment & Database
     ENV: str = "development"
     DATABASE_URL: str = "sqlite+aiosqlite:///./forex_ai.db"
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "forex_ai"
     REDIS_URL: str = "redis://localhost:6379/0"
     
     # Security
