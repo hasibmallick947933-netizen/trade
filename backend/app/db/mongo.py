@@ -66,6 +66,10 @@ async def init_mongo():
         await _create_indexes(mongo_db)
 
     except Exception as e:
+        mongo_db = None
+        if mongo_client:
+            mongo_client.close()
+            mongo_client = None
         logger.warning(
             f"MongoDB connection notice ({e}). Operating in memory/cached mode if MongoDB is not running locally. "
             "To connect to MongoDB Atlas, set MONGODB_URI in your environment."
