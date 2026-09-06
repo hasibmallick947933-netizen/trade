@@ -53,8 +53,8 @@ async def init_mongo():
     try:
         mongo_client = AsyncIOMotorClient(
             mongo_uri,
-            serverSelectionTimeoutMS=3000,
-            connectTimeoutMS=3000,
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000,
         )
         mongo_db = mongo_client[db_name]
 
