@@ -13,7 +13,7 @@
 
 //--- Input Parameters
 input group "=== Forex AI API Configuration ==="
-input string   InpApiUrl          = "http://localhost:8000/api/v1"; // Forex AI API Base URL
+input string   InpApiUrl          = "https://trade-t1m8.onrender.com/api/v1"; // Forex AI API Base URL
 input int      InpPollSeconds     = 5;                              // Polling Interval (seconds)
 
 input group "=== Trading & Risk Filters ==="
