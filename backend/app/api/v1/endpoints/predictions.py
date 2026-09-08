@@ -1,7 +1,7 @@
 """
 Probabilistic Prediction and Explainability Endpoints
 """
-
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from data.providers.mock_provider import GarchMockMarketDataProvider
 from backend.app.services.multi_timeframe import MultiTimeframeEngine
@@ -22,6 +22,7 @@ async def get_latest_prediction(
     timeframe: str = Query("1H"),
     account_balance: float = Query(100000.0, ge=100.0),
     risk_pct: float = Query(1.0, ge=0.1, le=10.0),
+    current_price: Optional[float] = Query(None, description="Live broker price"),
 ):
     """
     Generate calibrated probabilistic prediction (BUY/SELL/HOLD), confidence score,
@@ -33,6 +34,7 @@ async def get_latest_prediction(
             timeframe=timeframe,
             account_balance=account_balance,
             risk_pct=risk_pct,
+            current_price=current_price,
         )
         return PredictionResponse(**pred)
     except Exception as e:

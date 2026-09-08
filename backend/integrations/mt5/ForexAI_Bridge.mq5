@@ -34,6 +34,8 @@ double         ExtConfidence = 0.0;
 string         ExtMarketRegime = "UNKNOWN";
 double         ExtStopLoss = 0.0;
 double         ExtTakeProfit = 0.0;
+double         ExtSlPips = 20.0;
+double         ExtTpPips = 40.0;
 double         ExtRiskReward = 0.0;
 
 //+------------------------------------------------------------------+
@@ -140,16 +142,28 @@ double ExtractJsonDouble(string json, string field)
 //+------------------------------------------------------------------+
 //| Query Forex AI FastAPI REST Service                              |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Query Forex AI FastAPI REST Service                              |
+//+------------------------------------------------------------------+
 void FetchForexAISignal()
 {
    string pair = FormatPairName(_Symbol);
    string tf = FormatTimeframe(Period());
+   
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double mid = (bid > 0 && ask > 0) ? ((bid + ask) / 2.0) : 0.0;
+   
    string url = InpApiUrl + "/predictions/latest?pair=" + pair + "&timeframe=" + tf;
+   if(mid > 0)
+   {
+      url += "&current_price=" + DoubleToString(mid, _Digits);
+   }
    
    char postData[];
    char resultData[];
    string resultHeaders;
-   int timeout = 3000;
+   int timeout = 4000;
    
    ResetLastError();
    int res = WebRequest("GET", url, "", timeout, postData, resultData, resultHeaders);
@@ -163,14 +177,81 @@ void FetchForexAISignal()
       ExtProbHold      = ExtractJsonDouble(response, "prob_hold");
       ExtConfidence    = ExtractJsonDouble(response, "confidence");
       ExtMarketRegime  = ExtractJsonString(response, "market_regime");
-      ExtStopLoss      = ExtractJsonDouble(response, "stop_loss");
-      ExtTakeProfit    = ExtractJsonDouble(response, "take_profit_1");
       ExtRiskReward    = ExtractJsonDouble(response, "risk_reward_ratio");
+      
+      ExtSlPips        = ExtractJsonDouble(response, "sl_pips");
+      ExtTpPips        = ExtractJsonDouble(response, "tp_pips");
+      if(ExtSlPips <= 0) ExtSlPips = 20.0;
+      if(ExtTpPips <= 0) ExtTpPips = 40.0;
+      
+      // Standard Pip Unit: 0.0001 for 4/5-digit pairs, 0.01 for 2/3-digit JPY pairs
+      double pipUnit = (_Digits == 3 || _Digits == 5) ? _Point * 10 : _Point;
+      if(pipUnit <= 0) pipUnit = 0.0001;
+      
+      // Anchor SL and TP directly to the broker's real-time chart prices
+      if(ExtSignalState == "STRONG BUY" || ExtSignalState == "BUY" || ExtSignalState == "WEAK BUY")
+      {
+         // For BUY: Stop Loss is BELOW Ask, Take Profit is ABOVE Ask
+         ExtStopLoss   = NormalizeDouble(ask - (ExtSlPips * pipUnit), _Digits);
+         ExtTakeProfit = NormalizeDouble(ask + (ExtTpPips * pipUnit), _Digits);
+      }
+      else if(ExtSignalState == "STRONG SELL" || ExtSignalState == "SELL" || ExtSignalState == "WEAK SELL")
+      {
+         // For SELL: Stop Loss is ABOVE Bid, Take Profit is BELOW Bid
+         ExtStopLoss   = NormalizeDouble(bid + (ExtSlPips * pipUnit), _Digits);
+         ExtTakeProfit = NormalizeDouble(bid - (ExtTpPips * pipUnit), _Digits);
+      }
+      else // HOLD
+      {
+         ExtStopLoss   = NormalizeDouble(bid - (ExtSlPips * pipUnit), _Digits);
+         ExtTakeProfit = NormalizeDouble(bid + (ExtTpPips * pipUnit), _Digits);
+      }
+      
+      // Update on-chart visual levels
+      UpdateChartPriceLines();
    }
    else
    {
       ExtSignalState = "DISCONNECTED";
-      Print("WebRequest failed. Error code: ", GetLastError(), ". Check Options -> Allow WebRequest for: http://localhost:8000");
+      Print("WebRequest failed. Error code: ", GetLastError(), ". Check Options -> Allow WebRequest for: ", InpApiUrl);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw On-Chart Price Lines for SL and TP                          |
+//+------------------------------------------------------------------+
+void UpdateChartPriceLines()
+{
+   if(ExtStopLoss > 0)
+   {
+      if(ObjectFind(0, "ForexAI_SL") < 0)
+      {
+         ObjectCreate(0, "ForexAI_SL", OBJ_HLINE, 0, 0, ExtStopLoss);
+         ObjectSetInteger(0, "ForexAI_SL", OBJPROP_COLOR, clrRed);
+         ObjectSetInteger(0, "ForexAI_SL", OBJPROP_STYLE, STYLE_DASH);
+         ObjectSetInteger(0, "ForexAI_SL", OBJPROP_WIDTH, 1);
+         ObjectSetString(0, "ForexAI_SL", OBJPROP_TEXT, "Forex AI Target Stop Loss");
+      }
+      else
+      {
+         ObjectSetDouble(0, "ForexAI_SL", OBJPROP_PRICE, ExtStopLoss);
+      }
+   }
+   
+   if(ExtTakeProfit > 0)
+   {
+      if(ObjectFind(0, "ForexAI_TP") < 0)
+      {
+         ObjectCreate(0, "ForexAI_TP", OBJ_HLINE, 0, 0, ExtTakeProfit);
+         ObjectSetInteger(0, "ForexAI_TP", OBJPROP_COLOR, clrLimeGreen);
+         ObjectSetInteger(0, "ForexAI_TP", OBJPROP_STYLE, STYLE_DASH);
+         ObjectSetInteger(0, "ForexAI_TP", OBJPROP_WIDTH, 1);
+         ObjectSetString(0, "ForexAI_TP", OBJPROP_TEXT, "Forex AI Target Take Profit");
+      }
+      else
+      {
+         ObjectSetDouble(0, "ForexAI_TP", OBJPROP_PRICE, ExtTakeProfit);
+      }
    }
 }
 
@@ -179,17 +260,21 @@ void FetchForexAISignal()
 //+------------------------------------------------------------------+
 void DrawDashboard()
 {
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
    string text = "";
    text += "========================================\n";
    text += "          FOREX AI QUANTITATIVE BRIDGE   \n";
    text += "========================================\n";
    text += "Symbol / TF:    " + _Symbol + " (" + FormatTimeframe(Period()) + ")\n";
+   text += "Live Market:    Bid: " + DoubleToString(bid, _Digits) + " | Ask: " + DoubleToString(ask, _Digits) + "\n";
    text += "AI Signal:      " + ExtSignalState + "\n";
    text += "Probabilities:  BUY " + DoubleToString(ExtProbBuy, 1) + "% | SELL " + DoubleToString(ExtProbSell, 1) + "% | HOLD " + DoubleToString(ExtProbHold, 1) + "%\n";
    text += "Confidence:     " + DoubleToString(ExtConfidence, 1) + "%\n";
    text += "Regime:         " + ExtMarketRegime + "\n";
-   text += "Target SL:      " + DoubleToString(ExtStopLoss, _Digits) + "\n";
-   text += "Target TP1:     " + DoubleToString(ExtTakeProfit, _Digits) + "\n";
+   text += "Target SL:      " + DoubleToString(ExtStopLoss, _Digits) + "  [" + DoubleToString(ExtSlPips, 1) + " pips risk]\n";
+   text += "Target TP1:     " + DoubleToString(ExtTakeProfit, _Digits) + "  [" + DoubleToString(ExtTpPips, 1) + " pips target]\n";
    text += "Risk / Reward:  1 : " + DoubleToString(ExtRiskReward, 2) + "\n";
    text += "Auto-Trading:   " + (InpEnableAutoTrade ? "ENABLED" : "DISABLED (Visual / Alert Mode)") + "\n";
    text += "========================================";
@@ -206,31 +291,27 @@ void CheckAndExecuteTrades()
    
    if(ExtConfidence < InpMinConfidence) return; // Confidence filter
    
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
    // Buy Trigger
    if((ExtSignalState == "STRONG BUY" || ExtSignalState == "BUY") && ExtProbBuy >= InpMinProb)
    {
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double sl = ExtStopLoss;
-      double tp = ExtTakeProfit;
-      
-      if(sl < ask && tp > ask)
+      if(ExtStopLoss < ask && ExtTakeProfit > ask)
       {
-         ExtTrade.Buy(InpLotSize, _Symbol, ask, sl, tp, "Forex AI Buy Signal");
-         Print("Forex AI executed BUY order at ", ask, " SL: ", sl, " TP: ", tp);
+         ExtTrade.Buy(InpLotSize, _Symbol, ask, ExtStopLoss, ExtTakeProfit, "Forex AI Buy Signal");
+         Print("Forex AI executed BUY order at ", ask, " SL: ", ExtStopLoss, " TP: ", ExtTakeProfit);
       }
    }
    // Sell Trigger
    else if((ExtSignalState == "STRONG SELL" || ExtSignalState == "SELL") && ExtProbSell >= InpMinProb)
    {
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double sl = ExtStopLoss;
-      double tp = ExtTakeProfit;
-      
-      if(sl > bid && tp < bid)
+      if(ExtStopLoss > bid && ExtTakeProfit < bid)
       {
-         ExtTrade.Sell(InpLotSize, _Symbol, bid, sl, tp, "Forex AI Sell Signal");
-         Print("Forex AI executed SELL order at ", bid, " SL: ", sl, " TP: ", tp);
+         ExtTrade.Sell(InpLotSize, _Symbol, bid, ExtStopLoss, ExtTakeProfit, "Forex AI Sell Signal");
+         Print("Forex AI executed SELL order at ", bid, " SL: ", ExtStopLoss, " TP: ", ExtTakeProfit);
       }
    }
 }
+
 //+------------------------------------------------------------------+

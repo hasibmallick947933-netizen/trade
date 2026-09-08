@@ -34,6 +34,8 @@ class PredictionResponse(BaseModel):
     stop_loss: float
     take_profit_1: float
     take_profit_2: float
+    sl_pips: Optional[float] = 20.0
+    tp_pips: Optional[float] = 40.0
     risk_reward_ratio: float
     suggested_lot_size: float
     account_risk_cash: float

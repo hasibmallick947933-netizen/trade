@@ -63,6 +63,7 @@ class PredictionEngine:
         timeframe: str = "1H",
         account_balance: float = 100000.0,
         risk_pct: float = 1.0,
+        current_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Synthesize multi-source inputs into calibrated probabilities, targets, risk management, and explainability.
@@ -219,57 +220,52 @@ class PredictionEngine:
 
         # Risk Management: Dynamic ATR Stop Loss & Multi-Target Take Profits
         pip_unit = 0.0001 if "JPY" not in pair else 0.01
-        atr_buffer = max(atr * 1.5, 12.0 * pip_unit)
+        exec_price = float(current_price) if (current_price is not None and current_price > 0) else curr_price
+
+        # ATR-based dynamic stop distance in pips (minimum 15 pips)
+        atr_pips = max(atr / pip_unit, 14.0)
+        sl_pips = round(max(atr_pips * 1.5, 18.0), 1)
+        tp_pips = round(sl_pips * 2.0, 1)  # Strict 1:2 Risk/Reward target
 
         if direction == "BULLISH":
-            # Entry zone around current price to minor pullback
-            entry_min = round(curr_price - (atr * 0.3), 5)
-            entry_max = round(curr_price + (atr * 0.1), 5)
-            
-            # SL placed below nearest structural support or ATR buffer
-            nearest_support = structure["support_levels"][-1] if structure["support_levels"] else curr_price - atr_buffer
-            stop_loss = round(min(nearest_support - (2.0 * pip_unit), curr_price - atr_buffer), 5)
-            risk_dist = max(curr_price - stop_loss, 5.0 * pip_unit)
-            
-            take_profit_1 = round(curr_price + (risk_dist * 1.5), 5)
-            take_profit_2 = round(curr_price + (risk_dist * 2.8), 5)
-            rr_ratio = round((take_profit_1 - curr_price) / risk_dist, 2)
+            # For BUY: SL is BELOW entry, TP is ABOVE entry
+            stop_loss = round(exec_price - (sl_pips * pip_unit), 5)
+            take_profit_1 = round(exec_price + (tp_pips * pip_unit), 5)
+            take_profit_2 = round(exec_price + (tp_pips * 1.8 * pip_unit), 5)
+            entry_min = round(exec_price - (atr * 0.2), 5)
+            entry_max = round(exec_price + (atr * 0.1), 5)
+            rr_ratio = round(tp_pips / sl_pips, 2)
 
         elif direction == "BEARISH":
-            entry_min = round(curr_price - (atr * 0.1), 5)
-            entry_max = round(curr_price + (atr * 0.3), 5)
-            
-            nearest_res = structure["resistance_levels"][0] if structure["resistance_levels"] else curr_price + atr_buffer
-            stop_loss = round(max(nearest_res + (2.0 * pip_unit), curr_price + atr_buffer), 5)
-            risk_dist = max(stop_loss - curr_price, 5.0 * pip_unit)
-            
-            take_profit_1 = round(curr_price - (risk_dist * 1.5), 5)
-            take_profit_2 = round(curr_price - (risk_dist * 2.8), 5)
-            rr_ratio = round((curr_price - take_profit_1) / risk_dist, 2)
+            # For SELL: SL is ABOVE entry, TP is BELOW entry
+            stop_loss = round(exec_price + (sl_pips * pip_unit), 5)
+            take_profit_1 = round(exec_price - (tp_pips * pip_unit), 5)
+            take_profit_2 = round(exec_price - (tp_pips * 1.8 * pip_unit), 5)
+            entry_min = round(exec_price - (atr * 0.1), 5)
+            entry_max = round(exec_price + (atr * 0.2), 5)
+            rr_ratio = round(tp_pips / sl_pips, 2)
 
         else: # HOLD
-            entry_min = round(curr_price * 0.9995, 5)
-            entry_max = round(curr_price * 1.0005, 5)
-            stop_loss = round(curr_price - atr_buffer, 5)
-            take_profit_1 = round(curr_price + atr_buffer, 5)
-            take_profit_2 = round(curr_price + (atr_buffer * 2.0), 5)
+            stop_loss = round(exec_price - (sl_pips * pip_unit), 5)
+            take_profit_1 = round(exec_price + (tp_pips * pip_unit), 5)
+            take_profit_2 = round(exec_price + (tp_pips * 1.8 * pip_unit), 5)
+            entry_min = round(exec_price * 0.9995, 5)
+            entry_max = round(exec_price * 1.0005, 5)
             rr_ratio = 1.0
 
         # Position Sizing: Risk per trade % of capital
         risk_cash = account_balance * (risk_pct / 100.0)
         risk_per_pip_value = 10.0  # Standard lot $10 per pip
-        risk_pips = abs(curr_price - stop_loss) / pip_unit
-        risk_pips = max(risk_pips, 1.0)
-        suggested_lot_size = round(risk_cash / (risk_pips * risk_per_pip_value), 2)
+        suggested_lot_size = round(risk_cash / (sl_pips * risk_per_pip_value), 2)
         suggested_lot_size = max(0.01, min(suggested_lot_size, 10.0))
 
         # Expected price ranges and horizon projections
-        expected_range_low = round(curr_price - (atr * 2.0), 5)
-        expected_range_high = round(curr_price + (atr * 2.0), 5)
-        expected_return = round(((take_profit_1 - curr_price) / curr_price) * 100.0, 2) if direction == "BULLISH" else (
-            round(((curr_price - take_profit_1) / curr_price) * 100.0, 2) if direction == "BEARISH" else 0.05
+        expected_range_low = round(exec_price - (atr * 2.0), 5)
+        expected_range_high = round(exec_price + (atr * 2.0), 5)
+        expected_return = round(((take_profit_1 - exec_price) / exec_price) * 100.0, 2) if direction == "BULLISH" else (
+            round(((exec_price - take_profit_1) / exec_price) * 100.0, 2) if direction == "BEARISH" else 0.05
         )
-        expected_vol = round((atr / curr_price) * 100.0, 2)
+        expected_vol = round((atr / exec_price) * 100.0, 2)
 
         # Multi-horizon forecast probabilities
         horizons = {
@@ -282,7 +278,7 @@ class PredictionEngine:
 
         # Human-readable summary
         if direction == "BULLISH":
-            summary = f"Favorable setup for EUR/USD with {p_buy}% BUY probability. Supported by {factors_supporting[0] if factors_supporting else 'momentum'}. Upside target {take_profit_1} with risk capped at {stop_loss}."
+            summary = f"Favorable setup for {pair} with {p_buy}% BUY probability. Supported by {factors_supporting[0] if factors_supporting else 'momentum'}. Upside target {take_profit_1} with risk capped at {stop_loss}."
         elif direction == "BEARISH":
             summary = f"Bearish bias prevailing with {p_sell}% SELL probability. Pressured by {factors_opposing[0] if factors_opposing else 'resistance'}. Downside target {take_profit_1} with stop loss at {stop_loss}."
         else:
@@ -291,7 +287,7 @@ class PredictionEngine:
         return {
             "pair": pair,
             "timeframe": timeframe,
-            "current_price": round(curr_price, 5),
+            "current_price": round(exec_price, 5),
             "prob_buy": p_buy,
             "prob_sell": p_sell,
             "prob_hold": p_hold,
@@ -312,6 +308,8 @@ class PredictionEngine:
             "stop_loss": stop_loss,
             "take_profit_1": take_profit_1,
             "take_profit_2": take_profit_2,
+            "sl_pips": sl_pips,
+            "tp_pips": tp_pips,
             "risk_reward_ratio": rr_ratio,
             "suggested_lot_size": suggested_lot_size,
             "account_risk_cash": round(risk_cash, 2),
